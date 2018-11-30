@@ -1,0 +1,195 @@
+Altbier
+Amber ale
+American Amber Ale
+American Barleywine
+American Brown Ale
+American IPA
+American Lager
+American Pale Ale
+American Porter
+American Stout
+American-Style Amber
+American-Style Barley Wine Ale
+American-Style Brown Ale
+American-Style Cream Ale
+American-Style Imperial Porter
+American-Style Imperial Stout
+American-Style India Pale Ale
+American-Style Malt Liquor
+American-Style Pale Ale
+American-Style Pilsener
+American-Style Red Ale
+American-Style Stout
+American-Style Strong Pale Ale
+Australian-Style Pale Ale
+Baltic Porter
+Baltic-Style Porter
+Barley wine
+Belgian Pale Ale
+Belgian-Style Blonde Ale
+Belgian-Style Flanders Oud Bruin
+Belgian-Style Flanders Oud Bruin
+Belgian-Style Fruit Lambic
+Belgian-Style Gueuze Lambic
+Belgian-Style Lambic
+Belgian-Style Pale Ale
+Belgian-Style Witbier
+Berliner Weisse
+Berliner-Style Weisse
+Best Bitter
+Bitter
+Bière de Garde
+Blonde Ale
+Bock
+Bohemian-Style Pilsener
+Bok
+British Brown Ale
+British Golden Ale
+British-Style Barley Wine Ale
+British-Style Imperial Stout
+Brown ale
+Brown Beer
+Brown Porter
+California Common
+California Common Beer
+Classic English-Style Pale Ale
+Classic French & Belgian-Style Saison
+Classic Irish-Style Dry Stout
+Contemporary Gose
+Cream Ale
+Cream Stout
+Czech Pale Lager
+Czech Premium Pale Lager
+Dark Mild
+Doppelbock
+Dortmunder Export
+Dortmunder/European-Style Export
+Double bock
+Double India Pale Ale
+Double IPA
+Double Red Ale
+Dry Stout
+Dunkel
+Dunkel Weizen
+Dunkelweizen
+Dunkles
+Dunkles Bock
+Dunkles Weissbier
+Eisbock
+English Barleywine
+English IPA
+English Porter
+English-Style Brown Ale
+English-Style Dark Mild Ale
+English-Style India Pale Ale
+English-Style Pale Mild Ale
+English-Style Summer Ale
+European-Style Dark Lager
+Export
+Export-Style Stout
+Extra Special Bitter
+Festbier
+Flanders Red Ale
+Foreign Extra Stout
+French-Style Bière de Garde
+Fruit Lambic
+German Helles Exportbier
+German Pils
+German-Style Altbier
+German-Style Doppelbock
+German-Style Eisbock
+German-Style Heller Bock
+German-Style Kölsch
+German-Style Leichtes Weizen
+German-Style Maerzen
+German-Style Oktoberfest
+German-Style Pilsener
+German-Style Rye Ale
+German-Style Schwarzbier
+Golden
+Golden Ale
+Gose
+Gueuze
+Hefeweizen
+Hell
+Helles
+Helles Bock
+Imperial India Pale Ale
+Imperial Red Ale
+Imperial Stout
+India Pale Ale
+IPA
+International Pale Lager
+International-Style Pale Ale
+International-Style Pilsener
+Irish Extra Stout
+Irish Red Ale
+Irish Stout
+Irish-Style Red Ale
+Kolsch
+Kölsch
+Lambic
+Leipzig-Style Gose
+Light Ale
+Light Bitters
+London Brown Ale
+Maibock
+Malt Liquor
+Marzen
+Mild
+Mild ale
+Munich Dunkel
+Munich Helles
+Märzen
+Märzenbier
+Münchner (Munich)-Style Helles
+Münchner Dunkel
+Oatmeal Stout
+Oatmeal Stout
+Oktoberfest beers
+Oktoberfestbier
+Old Ale
+Ordinary Bitter
+Oud Bruin
+Oud Red Ale
+Pale Ale
+Pils
+Pilsener
+Pilsner
+Porter
+Pre-Prohibition Porter
+Red ale
+Red beer
+Robust Porter
+Roggenbier
+Saison
+Schwarzbier
+Scotch Ale
+Scottish Beer
+Session India Pale Ale
+Smoke Porter
+South German-Style Bernsteinfarbenes Weizen
+South German-Style Dunkel Weizen
+South German-Style Hefeweizen
+South German-Style Kristal Weizen
+South German-Style Weizenbock
+Special Bitter
+Specialty IPA
+Specialty Saison
+Steam beer
+Stout
+Strong Bitter
+Summer ale
+Sweet Stout
+Traditional German-Style Bock
+Tropical Stout
+Vienna
+Vienna Lager
+Vienna-Style Lager
+Wee Heavy
+Weissbier
+Weizenbier
+Weisse
+Weizenbock
+Wiesn
+Witbier
