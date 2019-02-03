@@ -1,91 +1,41 @@
+import gevent.monkey
+gevent.monkey.patch_all()
+
 import re
 import sys
 import json
+import queue
 import logging
+import sqlite3
 import requests
+import grequests
+import threading
 import urllib.parse
 from bs4 import BeautifulSoup
 
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('scraper_async')
+logger.setLevel(logging.DEBUG)
+fh = logging.FileHandler('scraper_async.log')
+fh.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
+
+DB_FILENAME = "scraper.db"
+
+MAX_SESSIONS = 100
 
 domain = 'https://www.beeradvocate.com/'
 places_rel_url = 'place/list/'
 places_url = urllib.parse.urljoin(domain, places_rel_url)
 places_params = {'start': 0, 'brewery': 'Y', 'sort': 'name'}
 
-def parse_breweries():	
-	next_page_start = 0
-	has_next = True
-	links = []
-	while has_next:
-		params = places_params.copy()
-		params['start'] = next_page_start
-		logging.debug("parse_breweries: fetching page with start {}".format(next_page_start))		
-
-		response = requests.get(url=places_url, params=params)
-		soup = BeautifulSoup(response.text, features='lxml')
-
-		baContent = soup.find("div", {"id": "ba-content"})
-		#logging.debug("parse_breweries: ba-content: {}".format(baContent))
-		table = baContent.find('table')
-		#logging.debug("parse_breweries: table: {}".format(table))
-		rows = table.find_all('a', href=re.compile('/beer/profile/'))
-		#logging.debug("parse_breweries: rows: {}".format(rows))
-		this_page_links = [r['href'] for r in rows]
-		logging.debug("parse_breweries: this_page_links: {}".format(this_page_links))
-		links.extend(this_page_links)
-
-		next_page_tag = soup.find('a', text = "next")
-		if next_page_tag:
-			next_page_link = next_page_tag['href']
-			parsed = urllib.parse.urlparse(next_page_link)
-			next_page_start_str = urllib.parse.parse_qs(parsed.query)['start'][0]
-			next_page_start = int(next_page_start_str)
-		else:
-			has_next = False
-	
-	logging.debug("parse_breweries: links: {}".format(links))
-	return links
-
-
-def parse_beers_from_breweries(links):
-	logging.debug("parse_beers_from_brewery: brewery_links: {}".format(links))
-	params = {'view': 'beers', 'show': 'all'}
-	beer_links = []
-	for link in links:
-		brewery_url = urllib.parse.urljoin(domain, link)
-		response = requests.get(url=brewery_url, params=params)
-		soup = BeautifulSoup(response.text, features='lxml')
-		baContent = soup.find("div", {"id":"ba-content"})
-		#logging.debug("parse_beers_from_brewery: ba-content: {}".format(baContent))
-	
-		tables = baContent.find_all("table")
-		if len(tables) < 3:
-			logging.warning(link)
-			continue
-		beers_table = baContent.find_all("table")[2]
-		#logging.debug("parse_beers_from_brewery: beers_table: {}".format(beers_table))
-
-		sortable_table = soup.find("table", {"class": "sortable"})
-		#logging.debug("parse_beers_from_brewery: sortable_table: {}".format(sortable_table))
-		rows = sortable_table.tbody.find_all('a', href=re.compile('/beer/profile/'))
-		#logging.debug("parse_beers_from_brewery: # rows: {}".format(len(rows)))
-
-		this_brewery_links = [r['href'] for r in rows]
-		logging.debug("parse_beers_from_brewery: this_brewery_links: {}".format(this_brewery_links))
-		beer_links.extend(this_brewery_links)
-	
-	return beer_links
-
-
-def parse_beer_details():
-	for beer_url in beer_urls:
-		url = BASE_URL + beer_url.select('@href').extract()[0]
-		yield Request(url=url, callback=self.parse_beer_detail)
-
-
 brewery_links = []
+
+
+def exception_handler(r, e):
+	print(e)
 
 
 def get_last_page_start():
@@ -100,12 +50,10 @@ def get_last_page_start():
 	return last_start
 
 
-def get_brewery_links_async():
+def get_brewery_links():
 	reqs = []
 	STEP = 20
 	last_page_start = get_last_page_start()
-	# HACK importing grequests at top of module causes requests to break
-	import grequests
 	for start in range(0, last_page_start, STEP):
 		params = places_params.copy()
 		params['start'] = start
@@ -128,179 +76,257 @@ def get_brewery_links_handler(response, *args, **kwargs):
 	brewery_links.extend(this_page_links)
 
 
-def exception_handler(r, e):
-	print(e)
-
-
 beer_urls = []
-breweries = []
+beer_ids = queue.Queue()
+breweries = queue.Queue()
+fetching_breweries = True
 
 
-def get_breweries_async():
-	# HACK importing grequests at top of module causes requests to break
-	import grequests
+def get_brewery_details():
 	params = {'view': 'beers', 'show': 'all'}
 	reqs = []
 	for url in brewery_links:
-		urllib.parse.urljoin()
-		reqs.append(grequests.get(places_url, params=params, callback=get_breweries_handler))
-	res = grequests.map(reqs)
+		brewery_url = urllib.parse.urljoin(domain, url)
+		reqs.append(grequests.get(brewery_url, params=params, callback=get_brewery_details_handler))
+	res = grequests.map(reqs, size=MAX_SESSIONS)
 
 
-def get_breweries_handler(response, *args, **kwargs):
+def get_brewery_details_handler(response, *args, **kwargs):
 	soup = BeautifulSoup(response.text, features='lxml')
 	this_brewery_beer_urls = parse_beers_from_brewery(soup)
 	beer_urls.extend(this_brewery_beer_urls)
-	brewrey_name = parse_brewery_details(soup)
-	brewery_id = parse_brewery_id(url)
-	brewery = {'id': brewery_id, 'name': brewery_name}
-	breweries.append(brewery)
+	for b in beer_urls:
+		beer = {}
+		beer['id'] = parse_beer_id(b)
+		beer['brewery_id'] = parse_brewery_id_beer_profile(b)
+		beer_ids.put(beer)
+	brewery = {}
+	brewery['name'] = parse_brewery_name(soup)
+	brewery['id'] = parse_brewery_id(response.url)
+	breweries.put(brewery)
+	#logger.info(brewery)
 
 
 def parse_beers_from_brewery(soup):
-	baContent = soup.find("div", id="baContent")
-	beers_table = baContent.table()[2].tr()[1].td().table()
-	beer_urls = beers_table.find_all('a', "/beer/profile/")
+	baContent = soup.find("div", {"id":"ba-content"})
+	#logger.debug("parse_beers_from_brewery: ba-content: {}".format(baContent))
+	
+	tables = baContent.find_all("table")
+	if len(tables) < 3:
+		logger.warning(link)
+		return []
+	beers_table = baContent.find_all("table")[2]
+	#logger.debug("parse_beers_from_brewery: beers_table: {}".format(beers_table))
+
+	sortable_table = soup.find("table", {"class": "sortable"})
+	#logger.debug("parse_beers_from_brewery: sortable_table: {}".format(sortable_table))
+	rows = sortable_table.tbody.find_all('a', href=re.compile('/beer/profile/'))
+	#logger.debug("parse_beers_from_brewery: # rows: {}".format(len(rows)))
+
+	beer_urls = [r['href'] for r in rows]
+	#logger.info("parse_beers_from_brewery: beer_urls: {}".format(beer_urls))
 	return beer_urls
 
 
 def parse_brewery_name(soup):
 	title_bar = soup.find('div', {"class": "titleBar"})
 	name = title_bar.h1.text
+	#logger.debug("parse_brewery_name: name: {}".format(name))
 	return name
 
 
 def parse_brewery_id(url):
-	parsed = urllib.parse.urlparse(url)
-	path = parsed.path
-	brewery_id = os.path.split(path)[1]
-	#split = urllib.parse.urlsplit(url)
+	#logger.debug("parse_brewery_id: url: {}".format(url))
+	path = urllib.parse.urlparse(url).path
+	#logger.debug("parse_brewery_id: path: {}".format(path))
+	brewery_id = [p for p in path.split('/') if p is not ''][-1]
+	#logger.debug("parse_brewery_id: id: {}".format(brewery_id))
 	return brewery_id
 
 
 def write_breweries():
-	# Placeholder
-	with open('breweries.json', 'w') as f:
-		json.dump(breweries, f) 
+	print("write_breweries")
+	with open('breweries_async.json', 'w') as f:
+		while fetching_breweries:
+			b = breweries.get()	
+			json.dump(b, f)
 
 
 def write_breweries_db():
-	brewery_tuples = [b.items() for b in breweries]
-	c.executemany("INSERT INTO breweries VALUES (?,?)", brewery_tuples)
+	conn = sqlite3.connect(DB_FILENAME)	
+	c = conn.cursor()
+	while fetching_breweries or not breweries.empty() or not beer_ids.empty():
+		if not breweries.empty():
+			b = breweries.get()
+			# TODO This is a less efficient way to do this.	
+			c.execute("UPDATE breweries SET name = ? WHERE id = ?", (b['name'], b['id']))
+			c.execute("INSERT OR IGNORE INTO breweries (id, name) VALUES (?,?)", (b['id'], b['name']))
+			conn.commit()
+		if not beer_ids.empty():
+			b = beer_ids.get()
+			# TODO This is a less efficient way to do this.	
+			c.execute("UPDATE beers SET brewery_id = ? WHERE id = ?", (b['brewery_id'], b['id']))
+			c.execute("INSERT OR IGNORE INTO beers (id, brewery_id) VALUES (?, ?)", (b['id'], b['brewery_id']))
+			conn.commit()
+	conn.close()
+
+"""
+def write_beer_ids_db():
+	conn = sqlite3.connect(DB_FILENAME)	
+	c = conn.cursor()
+	while fetching_breweries or not beer_ids.empty():
+		b = beer_ids.get()
+		# TODO This is a less efficient way to do this.	
+		c.execute("UPDATE beers SET brewery_id = ? WHERE id = ?", (b['brewery_id'], b['id']))
+		c.execute("INSERT OR IGNORE INTO beers (id, brewery_id) VALUES (?, ?)", (b['id'], b['brewery_id']))
+		conn.commit()
+	conn.close()
+"""
+
+beers = queue.Queue()
+fetching_beers = True
 
 
-beers = []
-
-
-def get_beers_async():
-	# HACK importing grequests at top of module causes requests to break
-	import grequests
+def get_beer_details():
 	reqs = []
 	for beer_url in beer_urls:
 		url = urllib.parse.urljoin(domain, beer_url)
-		reqs.append(grequests.get(url, callback=get_breweries_handler))
-	res = grequests.map(reqs)
+		reqs.append(grequests.get(url, callback=get_beer_details_handler))
+	res = grequests.map(reqs, size=MAX_SESSIONS)
 
 
-def get_beers_handler(response, *args, **kwargs):
+def get_beer_details_handler(response, *args, **kwargs):
 	soup = BeautifulSoup(response.text, features='lxml')
 	beer = {}
 	beer['id'] = parse_beer_id()
-	beer['brewery_id'] = parse_brewery_id()
+	beer['brewery_id'] = parse_brewery_id_beer_profile()
 	beer['name'] = parse_beer_name()
 	beer['score'] = parse_beer_score()
 	beer['ratings'] = parse_beer_ratings()	
 	beer['ranking'] = parse_beer_ranking()
 	beer['style'] = parse_beer_style()
 	beer['abv'] = parse_beer_abv()	
-	beer['last'] = parse_beer_last_rating()
-	beers.append(beer)
+	#beer['last'] = parse_beer_last_rating()
+	beers.put(beer)
 
 
 def parse_beer_id(url):
-	parsed = urllib.parse.urlparse(url)
-	path = parsed.path
-	beer_id = os.path.split(path)[1]
-	#split = urllib.parse.urlsplit(url)
+	#logger.debug("parse_beer_id: url: {}".format(url))
+	path = urllib.parse.urlparse(url).path
+	#logger.debug("parse_beer_id: path: {}".format(path))
+	beer_id = [p for p in path.split('/') if p is not ''][-1]
+	#logger.debug("parse_beer_id: id: {}".format(beer_id))
 	return beer_id
 
 
 def parse_brewery_id_beer_profile(url):
-	parsed = urllib.parse.urlparse(url)
-	path = parsed.path
-	brewery_id = os.path.split(path)[0].os.path.split(path)[1]
-	#split = urllib.parse.urlsplit(url)
+	#logger.debug("parse_brewery_id_beer_profile: url: {}".format(url))
+	path = urllib.parse.urlparse(url).path
+	#logger.debug("parse_brewery_id_beer_profile: path: {}".format(path))
+	brewery_id = [p for p in path.split('/') if p is not ''][-2]
+	#logger.debug("parse_brewery_id_beer_profile: id: {}".format(brewery_id))
 	return brewery_id
 
 
 def parse_beer_name(soup):
-	pass
+	title_bar = soup.find("div", attrs={"class": "titleBar"})
+	name = title_bar.findChildren("h1")[0]
+	return name.getText()
 
 
 def parse_beer_score(soup):
-	pass
+	score = soup.find(attrs={"class": "BAscore_big"})
+	return score.getText()
 
 
 def parse_beer_ratings(soup):
-	pass
+	rating_count = soup.find("span", attrs={"class": "ba-ratings"})
+	return rating_count.getText()
 
 
 def parse_beer_ranking(soup):
-	pass
+	item_stats = soup.find("div", {"id": "item_stats"})
+	item_stats.find("dd", text=re.compile('#'))
+	return rating_count.getText()
 
 
 def parse_beer_style(soup):
-	pass
+	info_box = soup.find("div", attrs={"id": "info_box"})
+	bb = info_box.findChildren("b", text="Style:")[0]
+	style = bb.find_next_sibling("a")
+	return style
 
 
 def parse_beer_abv(soup):
-	pass
+	info_box = soup.find("div", attrs={"id": "info_box"})
+	bb = info_box.findChildren("b", text="Alcohol by volume (ABV):")[0]
+	abv = bb.find_next_sibling()
+	return abv
 
 
 def parse_beer_last_rating(soup):
 	pass
 
 
-def write_beers():
-	with open('beers.json', 'w') as f:
-		json.dump(beers, f)
+def parse_brewery(response):
+	soup = BeautifulSoup(response.text, features="lxml")
+	info_box = soup.find("div", attrs={"id": "info_box"})
+	bb = info_box.findChildren("b", text="Brewed by:")[0]
+	brewery = bb.find_next_sibling("a")
+	return brewery
 
 
 def write_beers_db():
-	beer_tuples = [b.items() for b in beers]
-	c.executemany("INSERT INTO beers VALUES (?,?,?,?,?,?,?,?,?)", beer_tuples)
+	conn = sqlite3.connect(DB_FILENAME)	
+	c = conn.cursor()
+	while fetching_beers or not beers.empty():
+		b = beers.get()
+		# TODO This is a less efficient way to do this.	
+		c.execute("""UPDATE beers SET brewery_id = ?, name = ?, score = ?, 
+			ratings = ?, ranking = ?, style = ?, abv = ? WHERE id = ?""",
+			(b['brewery_id'], b['name'], b['score'], b['rating'],
+				b['ranking'], b['style'], b['abv'], b['id']))
+		c.execute("""INSERT OR IGNORE INTO beers (id, brewery_id, name, score, 
+			ratings, ranking, style, abv) VALUES (?,?,?,?,?,?,?,?)""",
+		(b['id'], b['brewery_id'], b['name'], b['score'], b['rating'],
+				b['ranking'], b['style'], b['abv']))
+		conn.commit()
+	conn.close()
+
 
 
 def main():
-	brewery_links = parse_breweries()
-	with open('breweries_single.json', 'w') as f:
-		json.dump(brewery_links, f)
-	beer_links = parse_beers_from_breweries(brewery_links)
-	with open('beers_single.json', 'w') as f:
-		json.dump(beer_links, f)
-
-
-def main_async():
-	get_brewery_links_async()
-	get_breweries_async()
+	get_brewery_links()
+	get_brewery_details()
 	write_breweries()
-	get_beers_async()
+	get_beer_details()
 	write_beers()
-	
+
+
+def main_from_brewery_links(filename):
+	global brewery_links
+	with open(filename) as f:
+		brewery_links = json.load(f)
+	write_brews_thread = threading.Thread(target=write_breweries_db)	
+	#write_beers_thread = threading.Thread(target=write_beer_ids_db)	
+	write_brews_thread.start()
+	#write_beers_thread.start()
+	get_brewery_details()
+	global fetching_breweries
+	fetching_breweries = False
+	write_brews_thread.join()
+	#write_beers_thread.join()
+
+
+def print_usage():
+	print("USAGE: python3 scraper.py [beer_links filename]")
+
 
 if __name__ == "__main__":
-	if len(sys.argv) == 2:
-		if sys.argv[1] == "async":
-			print("async")
-			main_async()
-	elif len(sys.argv) == 3:
-		if sys.argv[1] == "parse_beers":
-			brewery_links_file = sys.argv[2]
-			with open(brewery_links_file) as f:
-				brewery_links = json.load(f)
-			beer_links = parse_beers_from_breweries(brewery_links)
-			with open('beers_single_2.json', 'w') as f:
-				json.dump(beer_links, f)
-	else:
+	if len(sys.argv) < 2:
 		main()
+	elif len(sys.argv) == 3 and sys.argv[1] == "beer_links":
+		main_from_brewery_links(sys.argv[2]) 
+	else:
+		print_usage()
 
