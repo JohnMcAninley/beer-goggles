@@ -38,5 +38,5 @@ def draw_boxes(img, names):
 	thickness = 2
 	color = (0, 0, 255)
 	for n in names:
-		print(n['text'], "top", n['top'], "left", n['left'], "bottom", n['bottom'], "right", n['right'])
+		#print(n['text'], "top", n['top'], "left", n['left'], "bottom", n['bottom'], "right", n['right'])
 		cv2.rectangle(img, (n['left'], n['top']), (n['right'], n['bottom']), color, thickness)
