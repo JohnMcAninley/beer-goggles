@@ -1,6 +1,5 @@
-import gevent.monkey
-gevent.monkey.patch_all()
-
+#import gevent.monkey
+#gevent.monkey.patch_all()
 import re
 import sys
 import json
@@ -159,8 +158,10 @@ def write_breweries_db():
 		if not breweries.empty():
 			b = breweries.get()
 			# TODO This is a less efficient way to do this.	
-			c.execute("UPDATE breweries SET name = ? WHERE id = ?", (b['name'], b['id']))
-			c.execute("INSERT OR IGNORE INTO breweries (id, name) VALUES (?,?)", (b['id'], b['name']))
+			c.execute("UPDATE breweries SET name = ?, last_modified = datetime('now') WHERE id = ?",
+				 (b['name'], b['id']))
+			c.execute("""INSERT OR IGNORE INTO breweries (id, name, last_modified) 
+				VALUES (?,?, datetime('now'))""", (b['id'], b['name']))
 			conn.commit()
 		if not beer_ids.empty():
 			b = beer_ids.get()
@@ -318,6 +319,22 @@ def main_from_brewery_links(filename):
 	#write_beers_thread.join()
 
 
+def brewery_details_from_brewery_links_db():
+	conn = sqlite3.connect(DB_FILENAME)	
+	c = conn.cursor()
+	c.execute("SELECT id from breweries WHERE last_modified is null")
+	breweries_to_fetch = c.fetchall()
+	print("{} breweries to fetch".format(len(breweries_to_fetch)))
+	global brewery_links
+	brewery_links = ["/beer/profile/{}/".format(b_id) for b_id in breweries_to_fetch]
+	write_brews_thread = threading.Thread(target=write_breweries_db)	
+	write_brews_thread.start()
+	get_brewery_details()
+	global fetching_breweries
+	fetching_breweries = False
+	write_brews_thread.join()
+
+
 def print_usage():
 	print("USAGE: python3 scraper.py [beer_links filename]")
 
@@ -325,6 +342,8 @@ def print_usage():
 if __name__ == "__main__":
 	if len(sys.argv) < 2:
 		main()
+	elif len(sys.argv) == 2:
+		brewery_details_from_brewery_links_db()
 	elif len(sys.argv) == 3 and sys.argv[1] == "beer_links":
 		main_from_brewery_links(sys.argv[2]) 
 	else:
