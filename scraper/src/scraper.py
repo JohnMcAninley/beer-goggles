@@ -127,13 +127,6 @@ def parse_beers_from_brewery(soup):
 	baContent = soup.find("div", {"id":"ba-content"})
 	#logger.debug("parse_beers_from_brewery: ba-content: {}".format(baContent))
 	
-	tables = baContent.find_all("table")
-	if len(tables) < 3:
-		logger.warning(link)
-		return []
-	beers_table = baContent.find_all("table")[2]
-	#logger.debug("parse_beers_from_brewery: beers_table: {}".format(beers_table))
-
 	sortable_table = soup.find("table", {"class": "sortable"})
 	t_body = sortable_table.tbody
 
