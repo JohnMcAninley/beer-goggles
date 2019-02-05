@@ -4,26 +4,37 @@ import re
 import sys
 import json
 import queue
+import pprint
 import logging
 import sqlite3
 import requests
 import grequests
 import threading
+import collections
 import urllib.parse
 from bs4 import BeautifulSoup
 
 
 logger = logging.getLogger('scraper_async')
 logger.setLevel(logging.DEBUG)
+
 fh = logging.FileHandler('scraper_async.log')
 fh.setLevel(logging.DEBUG)
+
+# create console handler with a higher log level
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 fh.setFormatter(formatter)
+ch.setFormatter(formatter)
 logger.addHandler(fh)
+logger.addHandler(ch)
 
 DB_FILENAME = "scraper.db"
 
-MAX_SESSIONS = 100
+# Set low so server isn't bombarded and begins to refuse.
+MAX_SESSIONS = 2
 
 domain = 'https://www.beeradvocate.com/'
 places_rel_url = 'place/list/'
@@ -34,7 +45,7 @@ brewery_links = []
 
 
 def exception_handler(r, e):
-	print(e)
+	logger.error("REQUEST: {} EXCEPTION: {}".format(r, e))
 
 
 def get_last_page_start():
@@ -62,7 +73,6 @@ def get_brewery_links():
 
 
 def get_brewery_links_handler(response, *args, **kwargs):
-	print("HANDLER")
 	soup = BeautifulSoup(response.text, features='lxml')
 	baContent = soup.find("div", {"id": "ba-content"})
 	#logging.debug("parse_breweries: ba-content: {}".format(baContent))
@@ -75,9 +85,10 @@ def get_brewery_links_handler(response, *args, **kwargs):
 	brewery_links.extend(this_page_links)
 
 
-beer_urls = []
-beer_ids = queue.Queue()
-breweries = queue.Queue()
+#beer_ids = queue.Queue()
+#breweries = queue.Queue()
+beers = collections.deque()
+breweries = collections.deque()
 fetching_breweries = True
 
 
@@ -86,24 +97,30 @@ def get_brewery_details():
 	reqs = []
 	for url in brewery_links:
 		brewery_url = urllib.parse.urljoin(domain, url)
-		reqs.append(grequests.get(brewery_url, params=params, callback=get_brewery_details_handler))
-	res = grequests.map(reqs, size=MAX_SESSIONS)
+		reqs.append(grequests.get(brewery_url, params=params, 
+			callback=get_brewery_details_handler))
+	logger.info("STARTING THREADS to fetch brewery details.")
+	res = grequests.map(reqs, size=MAX_SESSIONS, exception_handler=exception_handler)
 
 
 def get_brewery_details_handler(response, *args, **kwargs):
+	logger.info("RESPONSE received from {}".format(response.url))
 	soup = BeautifulSoup(response.text, features='lxml')
-	this_brewery_beer_urls = parse_beers_from_brewery(soup)
-	beer_urls.extend(this_brewery_beer_urls)
-	for b in beer_urls:
-		beer = {}
-		beer['id'] = parse_beer_id(b)
-		beer['brewery_id'] = parse_brewery_id_beer_profile(b)
-		beer_ids.put(beer)
+
 	brewery = {}
+	brewery['id'] = extract_brewery_id(response.url)
 	brewery['name'] = parse_brewery_name(soup)
-	brewery['id'] = parse_brewery_id(response.url)
-	breweries.put(brewery)
-	#logger.info(brewery)
+	breweries.appendleft(brewery)
+
+	logger.info("ADDED brewery {} to write queue.".format(pprint.pformat(brewery))) 
+
+	this_brewery_beers = parse_beers_from_brewery(soup)
+
+	for b in this_brewery_beers:
+		b['brewery_id'] = brewery['id']
+	beers.extendleft(this_brewery_beers)
+
+	logger.info("ADDED {} beers to write queue.".format(len(this_brewery_beers)))
 
 
 def parse_beers_from_brewery(soup):
@@ -118,13 +135,51 @@ def parse_beers_from_brewery(soup):
 	#logger.debug("parse_beers_from_brewery: beers_table: {}".format(beers_table))
 
 	sortable_table = soup.find("table", {"class": "sortable"})
-	#logger.debug("parse_beers_from_brewery: sortable_table: {}".format(sortable_table))
-	rows = sortable_table.tbody.find_all('a', href=re.compile('/beer/profile/'))
-	#logger.debug("parse_beers_from_brewery: # rows: {}".format(len(rows)))
+	t_body = sortable_table.tbody
 
-	beer_urls = [r['href'] for r in rows]
-	#logger.info("parse_beers_from_brewery: beer_urls: {}".format(beer_urls))
-	return beer_urls
+	this_brewery_beers = []
+
+	for row in t_body:
+		cols = row.find_all('td')
+		beer = {}
+
+		# Get Link and Name from 1st col
+		#a = cols[0].find('a', href=re.compile('/beer/profile/'))
+		a = cols[0].a
+		link = a['href']
+		beer['id'] = extract_beer_id(link)
+		# NOTE The brewery ID is extracted from the link to every beer because
+		#				some places list beers that redirect to different breweries.
+		beer['brewery_id'] = extract_brewery_id(link)
+		beer['name'] = a.text
+
+		# Get Style from 2nd col
+		beer['style'] = a = cols[1].a.text
+
+		# Get ABV from 3rd col
+		abv_text = cols[2].text
+		try:
+			beer['abv'] = float(abv_text)
+		except:
+			beer['abv'] = None
+
+		# Get Ratings from 4th col
+		ratings_text = cols[3].text
+		try:
+			beer['ratings'] = float(ratings_text)
+		except:
+			beer['ratings'] = None
+
+		# Get Score from 5th col
+		score_text = cols[4].text
+		try:
+			beer['score'] = float(score_text)
+		except:
+			beer['score'] = None
+
+		this_brewery_beers.append(beer)	
+
+	return this_brewery_beers
 
 
 def parse_brewery_name(soup):
@@ -134,57 +189,82 @@ def parse_brewery_name(soup):
 	return name
 
 
-def parse_brewery_id(url):
-	#logger.debug("parse_brewery_id: url: {}".format(url))
+def extract_brewery_id(url):
+	"""
+	Extract the brewery's ID from the URL for a brewery profile in the form
+	"/beer/profile/[brewery_id]" or from the URL for a beer in the form 
+	"/beer/profile/[brewery_id]/[beer_id]".
+
+	Raises:
+		Error if the URL is not one of the above forms.
+	"""
 	path = urllib.parse.urlparse(url).path
-	#logger.debug("parse_brewery_id: path: {}".format(path))
-	brewery_id = [p for p in path.split('/') if p is not ''][-1]
-	#logger.debug("parse_brewery_id: id: {}".format(brewery_id))
+	path_parts = [p for p in path.split('/') if p is not '']
+	if len(path_parts) < 3:
+		raise ValueError("Incorrect URL format.")
+	if path_parts[0] != "beer" or path_parts[1] != "profile":
+		raise ValueError("Incorrect URL format.")
+	brewery_id = path_parts[2]
 	return brewery_id
 
 
-def write_breweries():
-	print("write_breweries")
-	with open('breweries_async.json', 'w') as f:
-		while fetching_breweries:
-			b = breweries.get()	
-			json.dump(b, f)
+def extract_beer_id(url):
+	"""
+	Extract the beer ID from the URL for a beer profile in the form 
+	"/beer/profile/[brewery_id]/[beer_id]".
+
+	Raises:
+		Error if the URL is not the above forms.
+	"""
+	path = urllib.parse.urlparse(url).path
+	path_parts = [p for p in path.split('/') if p is not '']
+	if len(path_parts) < 4:
+		raise ValueError("Incorrect URL format.")
+	if path_parts[0] != "beer" or path_parts[1] != "profile":
+		raise ValueError("Incorrect URL format.")
+	beer_id = path_parts[3]
+	return beer_id
 
 
 def write_breweries_db():
+	# TODO Use deques instead of queues so writes can be batch processed.
 	conn = sqlite3.connect(DB_FILENAME)	
 	c = conn.cursor()
-	while fetching_breweries or not breweries.empty() or not beer_ids.empty():
-		if not breweries.empty():
-			b = breweries.get()
-			# TODO This is a less efficient way to do this.	
-			c.execute("UPDATE breweries SET name = ?, last_modified = datetime('now') WHERE id = ?",
-				 (b['name'], b['id']))
-			c.execute("""INSERT OR IGNORE INTO breweries (id, name, last_modified) 
-				VALUES (?,?, datetime('now'))""", (b['id'], b['name']))
+	while fetching_breweries or len(breweries) or len(beers):
+		min_writable_brews = len(breweries)
+		if min_writable_brews:
+			#HACK Kinda hacky way to batch write without blocking. Another possibility
+			#			is to acquire lock, copy and clear deque, then release lock.
+			brews_to_write = [breweries.pop() for b in range(min_writable_brews)]
+			brew_tuples_to_write = [(b['name'], b['id']) for b in brews_to_write]
+			# TODO This is a less efficient way to do this.	An UPSERT type SQL query
+			# 		should perform better.
+			c.executemany("UPDATE breweries SET name = ?, last_modified = datetime('now') WHERE id = ?",
+				 brew_tuples_to_write)
+			c.executemany("""INSERT OR IGNORE INTO breweries (name, last_modified, id) 
+				VALUES (?,datetime('now'),?)""", brew_tuples_to_write)
 			conn.commit()
-		if not beer_ids.empty():
-			b = beer_ids.get()
-			# TODO This is a less efficient way to do this.	
-			c.execute("UPDATE beers SET brewery_id = ? WHERE id = ?", (b['brewery_id'], b['id']))
-			c.execute("INSERT OR IGNORE INTO beers (id, brewery_id) VALUES (?, ?)", (b['id'], b['brewery_id']))
+			logger.debug("WROTE {} breweries to DB.".format(len(brews_to_write)))
+		min_writable_beers = len(beers)
+		if min_writable_beers:
+			#HACK Kinda hacky way to batch write without blocking. Another possibility
+			#			is to acquire lock, copy and clear deque, then release lock.
+			beers_to_write = [beers.pop() for b in range(min_writable_beers)]
+			beer_tuples_to_write = [(b['brewery_id'], b['name'], b['score'], 
+				b['ratings'], b['style'], b['abv'], b['id']) for b in beers_to_write]
+			#TODO This is a less efficient way to do this. An UPSERT type SQL query
+			# 		should perform better.
+			c.executemany("""UPDATE beers SET brewery_id = ?, name = ?, score = ?,
+				ratings = ?, style = ?, abv = ?, last = datetime('now') WHERE id = ?""", 
+				beer_tuples_to_write)
+			c.executemany("""INSERT OR IGNORE INTO beers (brewery_id, name, score, 
+				ratings, style, abv, id, last) VALUES (?,?,?,?,?,?,?, datetime('now'))""", 
+				beer_tuples_to_write)
 			conn.commit()
+			logger.debug("WROTE {} beers to DB.".format(len(beers_to_write)))
 	conn.close()
 
-"""
-def write_beer_ids_db():
-	conn = sqlite3.connect(DB_FILENAME)	
-	c = conn.cursor()
-	while fetching_breweries or not beer_ids.empty():
-		b = beer_ids.get()
-		# TODO This is a less efficient way to do this.	
-		c.execute("UPDATE beers SET brewery_id = ? WHERE id = ?", (b['brewery_id'], b['id']))
-		c.execute("INSERT OR IGNORE INTO beers (id, brewery_id) VALUES (?, ?)", (b['id'], b['brewery_id']))
-		conn.commit()
-	conn.close()
-"""
 
-beers = queue.Queue()
 fetching_beers = True
 
 
@@ -199,8 +279,8 @@ def get_beer_details():
 def get_beer_details_handler(response, *args, **kwargs):
 	soup = BeautifulSoup(response.text, features='lxml')
 	beer = {}
-	beer['id'] = parse_beer_id()
-	beer['brewery_id'] = parse_brewery_id_beer_profile()
+	beer['id'] = extract_beer_id()
+	beer['brewery_id'] = extract_brewery_id()
 	beer['name'] = parse_beer_name()
 	beer['score'] = parse_beer_score()
 	beer['ratings'] = parse_beer_ratings()	
@@ -209,24 +289,6 @@ def get_beer_details_handler(response, *args, **kwargs):
 	beer['abv'] = parse_beer_abv()	
 	#beer['last'] = parse_beer_last_rating()
 	beers.put(beer)
-
-
-def parse_beer_id(url):
-	#logger.debug("parse_beer_id: url: {}".format(url))
-	path = urllib.parse.urlparse(url).path
-	#logger.debug("parse_beer_id: path: {}".format(path))
-	beer_id = [p for p in path.split('/') if p is not ''][-1]
-	#logger.debug("parse_beer_id: id: {}".format(beer_id))
-	return beer_id
-
-
-def parse_brewery_id_beer_profile(url):
-	#logger.debug("parse_brewery_id_beer_profile: url: {}".format(url))
-	path = urllib.parse.urlparse(url).path
-	#logger.debug("parse_brewery_id_beer_profile: path: {}".format(path))
-	brewery_id = [p for p in path.split('/') if p is not ''][-2]
-	#logger.debug("parse_brewery_id_beer_profile: id: {}".format(brewery_id))
-	return brewery_id
 
 
 def parse_beer_name(soup):
@@ -320,13 +382,19 @@ def main_from_brewery_links(filename):
 
 
 def brewery_details_from_brewery_links_db():
+	logger.info("FETCHING BREWERY DETAILS FOR IDS IN DB.")
 	conn = sqlite3.connect(DB_FILENAME)	
 	c = conn.cursor()
-	c.execute("SELECT id from breweries WHERE last_modified is null")
+	#c.execute("SELECT id FROM breweries WHERE last_modified IS NULL")
+	#c.execute("""SELECT id FROM breweries WHERE last_modified IS NULL AND 
+	#	id NOT IN (SELECT DISTINCT brewery_id FROM beers WHERE brewery_id NOT NULL)""")
+	c.execute("""SELECT id FROM breweries WHERE last_modified IS NULL AND 
+		id NOT IN (SELECT DISTINCT brewery_id FROM beers WHERE brewery_id NOT NULL)
+		LIMIT 64""")
 	breweries_to_fetch = c.fetchall()
-	print("{} breweries to fetch".format(len(breweries_to_fetch)))
+	logger.info("{} breweries to fetch".format(len(breweries_to_fetch)))
 	global brewery_links
-	brewery_links = ["/beer/profile/{}/".format(b_id) for b_id in breweries_to_fetch]
+	brewery_links = ["/beer/profile/{}/".format(b[0]) for b in breweries_to_fetch]
 	write_brews_thread = threading.Thread(target=write_breweries_db)	
 	write_brews_thread.start()
 	get_brewery_details()
@@ -342,7 +410,7 @@ def print_usage():
 if __name__ == "__main__":
 	if len(sys.argv) < 2:
 		main()
-	elif len(sys.argv) == 2:
+	elif len(sys.argv) == 2 and sys.argv[1] == "db":
 		brewery_details_from_brewery_links_db()
 	elif len(sys.argv) == 3 and sys.argv[1] == "beer_links":
 		main_from_brewery_links(sys.argv[2]) 
