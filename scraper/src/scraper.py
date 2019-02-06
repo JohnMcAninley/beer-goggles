@@ -43,9 +43,13 @@ places_rel_url = 'place/list/'
 places_url = urllib.parse.urljoin(domain, places_rel_url)
 places_params = {'start': 0, 'brewery': 'Y', 'sort': 'name'}
 
+progress = {'breweries': 0, 'beers': 0, 'errors': 0}
+
 
 def exception_handler(r, e):
+	progress['errors'] += 1
 	logger.error("REQUEST URL: {} EXCEPTION: {}".format(r.url, e))
+	logger.error("{} ERRORS HAVE OCCURRED".format(progress['errors']))
 
 
 def get_last_page_start():
@@ -78,6 +82,8 @@ def get_breweries_handler(response, *args, **kwargs):
 	logger.info("this_page_breweries: {}".format(pprint.pformat(this_page_breweries)))
 	logger.info("response time (s): {}".format(response.elapsed))
 	db.breweries.extendleft(this_page_breweries)
+	progress['breweries'] += len(this_page_breweries)
+	logger.info("FETCHED: {} breweries.".format(progress['breweries']))
 
 
 def get_brewery_details(paths):
@@ -106,6 +112,9 @@ def get_brewery_details_handler(response, *args, **kwargs):
 	this_brewery_beers = parse.brewery.beers(soup)
 	db.beers.extendleft(this_brewery_beers)
 	logger.info("ADDED {} beers to write queue.".format(len(this_brewery_beers)))
+	progress['breweries'] += 1
+	progress['beers'] += len(this_brewery_beers)
+	logger.info("FETCHED: {} breweries and {} beers.".format(progress['breweries'], progress['beers']))
 	time.sleep(1)
 
 
